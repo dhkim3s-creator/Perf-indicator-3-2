@@ -1,829 +1,839 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
-  onSnapshot, 
-  setDoc
-} from 'firebase/firestore';
-import { 
-  Save, LayoutDashboard, Calendar, PieChart as PieChartIcon, 
-  CheckCircle2, AlertCircle, Plus, Trash2, Edit2, Search, 
-  Building, Users, Coins, Menu, X, ChevronRight, Check, AlertTriangle, ExternalLink, WifiOff, HardDrive
-} from 'lucide-react';
-
-// --- Firebase Configuration ---
-const firebaseConfig = {
-  apiKey: "AIzaSyBr3eJoRgWPkDmhMoyRoXzLL1ImiPiM_NI",
-  authDomain: "perf-indicator-3-2.firebaseapp.com",
-  databaseURL: "https://perf-indicator-3-2-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "perf-indicator-3-2",
-  storageBucket: "perf-indicator-3-2.firebasestorage.app",
-  messagingSenderId: "123844484790",
-  appId: "1:123844484790:web:712b616ea6dbcf53e79017"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-// Use a consistent app ID for Firestore paths (separate from Firebase Config appId)
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'univ-coop-project-v2';
-const LOCAL_STORAGE_KEY = `univ_coop_data_${appId}`;
-
-// --- Utility Functions ---
-const formatNumber = (num) => {
-  if (typeof num !== 'number') return '0';
-  return num.toLocaleString();
-};
-
-// --- Components ---
-
-const StatusBadge = ({ status, onClick }) => {
-  const styles = {
-    '예정': 'bg-slate-100 text-slate-500 border-slate-200',
-    '진행': 'bg-blue-50 text-blue-600 border-blue-200',
-    '완료': 'bg-emerald-50 text-emerald-600 border-emerald-200',
-    '보류': 'bg-amber-50 text-amber-600 border-amber-200',
-  };
-
-  return (
-    <div className="flex gap-1">
-      {['예정', '진행', '완료'].map((s) => (
-        <button
-          key={s}
-          onClick={() => onClick(s)}
-          className={`px-2 py-1 text-xs border rounded transition-colors ${
-            status === s 
-              ? (styles[s] || styles['예정']) + ' font-bold ring-1 ring-offset-1 ring-transparent' 
-              : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          {s}
-        </button>
-      ))}
-    </div>
-  );
-};
-
-const TabButton = ({ active, label, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`px-6 py-2.5 text-sm font-medium transition-all rounded-lg ${
-      active 
-        ? 'bg-white text-blue-600 shadow-sm border border-slate-200' 
-        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
-    }`}
-  >
-    {label}
-  </button>
-);
-
-// --- Main Application ---
-
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [isOffline, setIsOffline] = useState(false); // New state for offline mode
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [saving, setSaving] = useState(false);
-
-  // --- Initial Data State ---
-  const [metrics, setMetrics] = useState([
-    { id: 'm1', category: '지자체', name: '기업 참여 수', unit: '개', target: 3, half1: 0, half2: 0, weight: 0.7 },
-    { id: 'm2', category: '지자체', name: '학생 참여 수', unit: '명', target: 30, half1: 0, half2: 0, weight: 0.3 },
-    { id: 'u1', category: '대학', name: '정규교과 운영', unit: '건', target: 2, half1: 0, half2: 0, weight: 0.6 },
-    { id: 'u2', category: '대학', name: '비교과 운영', unit: '건', target: 3, half1: 0, half2: 0, weight: 0.4 },
-    { id: 'a1', category: '자율', name: '교육 이수자 만족도', unit: '점', target: 4.2, half1: 0, half2: 0, weight: 0 },
-    { id: 'a2', category: '자율', name: '융합형 교육 운영', unit: '건', target: 12, half1: 0, half2: 0, weight: 0 },
-  ]);
-
-  const [tasks, setTasks] = useState([
-    { id: 1, category: '협의체', title: '참여대학 발대식', date: '2025-06-30', status: '완료', note: '운영 방안 협의 완료' },
-    { id: 2, category: '협의체', title: '참여대학 업무 협약식', date: '2025-06-30', status: '완료', note: '대전형 공유 대학' },
-    { id: 3, category: '교육과정', title: '공동 교육체계 구축 (LMS)', date: '2025-08-31', status: '진행', note: '기존 시스템 연동 검토 중' },
-    { id: 4, category: '교육과정', title: '융합형 교과목 프로그램 개발', date: '2025-08-31', status: '진행', note: '기초의학, 약학개론 등' },
-    { id: 5, category: '운영', title: '공통/기초 교과 운영', date: '2025-12-31', status: '예정', note: '2학기 개설 예정' },
-    { id: 6, category: '환경개선', title: '교육연구 환경개선 기자재 구입', date: '2025-10-31', status: '예정', note: '고성능 실습용 노트북 등' },
-    { id: 7, category: '성과확산', title: '성과활용 확산 (공유회/포럼)', date: '2026-02-28', status: '예정', note: '지자체 및 4개 대학 합동' },
-  ]);
-
-  const [budget, setBudget] = useState({
-    total: 142000, // 천원 단위
-    expenses: [
-      { id: 1, date: '2025-06-15', item: '발대식 운영비', amount: 2500 },
-      { id: 2, date: '2025-07-01', item: 'LMS 시스템 초기 구축비', amount: 15000 },
-    ]
-  });
-
-  // --- Inputs State ---
-  const [newTask, setNewTask] = useState({ category: '', title: '', date: '', note: '' });
-  const [newExpense, setNewExpense] = useState({ date: '', item: '', amount: '' });
-
-  // --- Editing State ---
-  const [editingTaskId, setEditingTaskId] = useState(null);
-  const [editedTask, setEditedTask] = useState({});
-
-  const [editingExpenseId, setEditingExpenseId] = useState(null);
-  const [editedExpense, setEditedExpense] = useState({});
-
-  const [isEditingBudget, setIsEditingBudget] = useState(false);
-  const [newBudgetTotal, setNewBudgetTotal] = useState(0);
-
-  // --- Auth & Data Sync ---
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (error) {
-        console.warn("Auth failed, falling back to offline mode.");
-        setIsOffline(true);
-        setLoading(false);
-      }
-    };
-    initAuth();
-    return onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUser(user);
-        setIsOffline(false);
-      } else {
-        setUser(null);
-      }
-    });
-  }, []);
-
-  useEffect(() => {
-    // If offline, try to load from localStorage
-    if (isOffline) {
-      try {
-        const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (localData) {
-          const parsed = JSON.parse(localData);
-          if (parsed.metrics) setMetrics(parsed.metrics);
-          if (parsed.tasks) setTasks(parsed.tasks);
-          if (parsed.budget) setBudget(parsed.budget);
-        }
-      } catch (e) {
-        console.warn("Failed to load local data", e);
-      }
-      setLoading(false);
-      return;
-    }
-
-    if (!user) return;
-    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main');
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[3-2] 대학간 교육협력 실적관리</title>
     
-    const unsubscribe = onSnapshot(docRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        if (data.metrics && Array.isArray(data.metrics)) setMetrics(data.metrics);
-        if (data.tasks && Array.isArray(data.tasks)) setTasks(data.tasks);
-        if (data.budget) setBudget(data.budget);
-      } else {
-        setDoc(docRef, { metrics, tasks, budget });
-      }
-      setLoading(false);
-    }, (error) => {
-      console.error("Firebase Snapshot Error:", error);
-      // Fallback if snapshot fails (e.g. permission error)
-      setIsOffline(true);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user, isOffline]);
-
-  const saveData = async (updatedData = {}) => {
-    setSaving(true);
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    const dataToSave = {
-      metrics: updatedData.metrics || metrics,
-      tasks: updatedData.tasks || tasks,
-      budget: updatedData.budget || budget
-    };
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    if (isOffline) {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
-        setTimeout(() => setSaving(false), 500);
-      } catch (e) {
-        console.warn("Local save failed", e);
-        setSaving(false);
-      }
-      return;
+    <!-- Import Map: 라이브러리 경로 설정 -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0"
+        }
     }
+    </script>
 
-    if (!user) {
-      setSaving(false);
-      return;
-    }
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { font-family: 'Pretendard', sans-serif; }
+        
+        /* 애니메이션 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <div id="root"></div>
 
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), dataToSave);
-    } catch (err) {
-      console.error("Save Error:", err);
-    } finally {
-      setTimeout(() => setSaving(false), 500);
-    }
-  };
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { initializeApp } from 'firebase/app';
+        import { 
+            getAuth, 
+            signInWithCustomToken, 
+            signInAnonymously, 
+            onAuthStateChanged 
+        } from 'firebase/auth';
+        import { 
+            getFirestore, 
+            doc, 
+            onSnapshot, 
+            setDoc 
+        } from 'firebase/firestore';
+        import { 
+            Save, LayoutDashboard, Calendar, PieChart as PieChartIcon, 
+            CheckCircle2, AlertCircle, Plus, Trash2, Edit2, Search, 
+            Building, Users, Coins, Menu, X, ChevronRight, Check, 
+            AlertTriangle, ExternalLink, WifiOff, HardDrive 
+        } from 'lucide-react';
 
-  // --- Handlers ---
-  const handleMetricChange = (id, field, value) => {
-    const newMetrics = metrics.map(m => m.id === id ? { ...m, [field]: Number(value) } : m);
-    setMetrics(newMetrics);
-    saveData({ metrics: newMetrics });
-  };
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBr3eJoRgWPkDmhMoyRoXzLL1ImiPiM_NI",
+            authDomain: "perf-indicator-3-2.firebaseapp.com",
+            databaseURL: "https://perf-indicator-3-2-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "perf-indicator-3-2",
+            storageBucket: "perf-indicator-3-2.firebasestorage.app",
+            messagingSenderId: "123844484790",
+            appId: "1:123844484790:web:712b616ea6dbcf53e79017"
+        };
 
-  const handleAddTask = () => {
-    if (!newTask.title) return;
-    const updatedTasks = [...tasks, { ...newTask, id: Date.now(), status: '예정' }];
-    setTasks(updatedTasks);
-    setNewTask({ category: '', title: '', date: '', note: '' });
-    saveData({ tasks: updatedTasks });
-  };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = 'univ-coop-project-v2';
+        const LOCAL_STORAGE_KEY = `univ_coop_data_${appId}`;
 
-  // --- Task Editing Handlers ---
-  const startEditTask = (task) => {
-    setEditingTaskId(task.id);
-    setEditedTask({ ...task });
-  };
+        // --- Utility Functions ---
+        const formatNumber = (num) => {
+            if (typeof num !== 'number') return '0';
+            return num.toLocaleString();
+        };
 
-  const cancelEditTask = () => {
-    setEditingTaskId(null);
-    setEditedTask({});
-  };
+        // --- Components ---
+        const StatusBadge = ({ status, onClick }) => {
+            const styles = {
+                '예정': 'bg-slate-100 text-slate-500 border-slate-200',
+                '진행': 'bg-blue-50 text-blue-600 border-blue-200',
+                '완료': 'bg-emerald-50 text-emerald-600 border-emerald-200',
+                '보류': 'bg-amber-50 text-amber-600 border-amber-200',
+            };
 
-  const saveEditTask = () => {
-    const updatedTasks = tasks.map(t => t.id === editedTask.id ? editedTask : t);
-    setTasks(updatedTasks);
-    saveData({ tasks: updatedTasks });
-    setEditingTaskId(null);
-  };
+            return (
+                <div className="flex gap-1">
+                    {['예정', '진행', '완료'].map((s) => (
+                        <button
+                            key={s}
+                            onClick={() => onClick(s)}
+                            className={`px-2 py-1 text-xs border rounded transition-colors ${
+                                status === s 
+                                ? (styles[s] || styles['예정']) + ' font-bold ring-1 ring-offset-1 ring-transparent' 
+                                : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
+                            }`}
+                        >
+                            {s}
+                        </button>
+                    ))}
+                </div>
+            );
+        };
 
-  const handleDeleteTask = (id) => {
-    if (!window.confirm("정말로 이 과제를 삭제하시겠습니까?")) return;
-    const updatedTasks = tasks.filter(t => t.id !== id);
-    setTasks(updatedTasks);
-    saveData({ tasks: updatedTasks });
-  };
+        const TabButton = ({ active, label, onClick }) => (
+            <button
+                onClick={onClick}
+                className={`px-6 py-2.5 text-sm font-medium transition-all rounded-lg ${
+                    active 
+                        ? 'bg-white text-blue-600 shadow-sm border border-slate-200' 
+                        : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
+                }`}
+            >
+                {label}
+            </button>
+        );
 
-  const handleStatusChange = (id, status) => {
-    const updatedTasks = tasks.map(t => t.id === id ? { ...t, status } : t);
-    setTasks(updatedTasks);
-    saveData({ tasks: updatedTasks });
-  };
+        // --- Main Application ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [isOffline, setIsOffline] = useState(false);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [saving, setSaving] = useState(false);
 
-  // --- Budget Editing Handlers ---
-  const handleAddExpense = () => {
-    if (!newExpense.item || !newExpense.amount) return;
-    const updatedBudget = {
-      ...budget,
-      expenses: [...budget.expenses, { ...newExpense, id: Date.now(), amount: Number(newExpense.amount) }]
-    };
-    setBudget(updatedBudget);
-    setNewExpense({ date: '', item: '', amount: '' });
-    saveData({ budget: updatedBudget });
-  };
+            // --- Initial Data State ---
+            const [metrics, setMetrics] = useState([
+                { id: 'm1', category: '지자체', name: '기업 참여 수', unit: '개', target: 3, half1: 0, half2: 0, weight: 0.7 },
+                { id: 'm2', category: '지자체', name: '학생 참여 수', unit: '명', target: 30, half1: 0, half2: 0, weight: 0.3 },
+                { id: 'u1', category: '대학', name: '정규교과 운영', unit: '건', target: 2, half1: 0, half2: 0, weight: 0.6 },
+                { id: 'u2', category: '대학', name: '비교과 운영', unit: '건', target: 3, half1: 0, half2: 0, weight: 0.4 },
+                { id: 'a1', category: '자율', name: '교육 이수자 만족도', unit: '점', target: 4.2, half1: 0, half2: 0, weight: 0 },
+                { id: 'a2', category: '자율', name: '융합형 교육 운영', unit: '건', target: 12, half1: 0, half2: 0, weight: 0 },
+            ]);
 
-  const startEditExpense = (exp) => {
-    setEditingExpenseId(exp.id);
-    setEditedExpense({ ...exp });
-  };
+            const [tasks, setTasks] = useState([
+                { id: 1, category: '협의체', title: '참여대학 발대식', date: '2025-06-30', status: '완료', note: '운영 방안 협의 완료' },
+                { id: 2, category: '협의체', title: '참여대학 업무 협약식', date: '2025-06-30', status: '완료', note: '대전형 공유 대학' },
+                { id: 3, category: '교육과정', title: '공동 교육체계 구축 (LMS)', date: '2025-08-31', status: '진행', note: '기존 시스템 연동 검토 중' },
+                { id: 4, category: '교육과정', title: '융합형 교과목 프로그램 개발', date: '2025-08-31', status: '진행', note: '기초의학, 약학개론 등' },
+                { id: 5, category: '운영', title: '공통/기초 교과 운영', date: '2025-12-31', status: '예정', note: '2학기 개설 예정' },
+                { id: 6, category: '환경개선', title: '교육연구 환경개선 기자재 구입', date: '2025-10-31', status: '예정', note: '고성능 실습용 노트북 등' },
+                { id: 7, category: '성과확산', title: '성과활용 확산 (공유회/포럼)', date: '2026-02-28', status: '예정', note: '지자체 및 4개 대학 합동' },
+            ]);
 
-  const cancelEditExpense = () => {
-    setEditingExpenseId(null);
-    setEditedExpense({});
-  };
+            const [budget, setBudget] = useState({
+                total: 142000, 
+                expenses: [
+                    { id: 1, date: '2025-06-15', item: '발대식 운영비', amount: 2500 },
+                    { id: 2, date: '2025-07-01', item: 'LMS 시스템 초기 구축비', amount: 15000 },
+                ]
+            });
 
-  const saveEditExpense = () => {
-    const updatedBudget = {
-      ...budget,
-      expenses: budget.expenses.map(e => e.id === editedExpense.id ? {...editedExpense, amount: Number(editedExpense.amount)} : e)
-    };
-    setBudget(updatedBudget);
-    saveData({ budget: updatedBudget });
-    setEditingExpenseId(null);
-  };
+            // --- Inputs State ---
+            const [newTask, setNewTask] = useState({ category: '', title: '', date: '', note: '' });
+            const [newExpense, setNewExpense] = useState({ date: '', item: '', amount: '' });
 
-  const handleDeleteExpense = (id) => {
-    if (!window.confirm("정말로 이 집행내역을 삭제하시겠습니까?")) return;
-    const updatedBudget = {
-      ...budget,
-      expenses: budget.expenses.filter(e => e.id !== id)
-    };
-    setBudget(updatedBudget);
-    saveData({ budget: updatedBudget });
-  };
+            // --- Editing State ---
+            const [editingTaskId, setEditingTaskId] = useState(null);
+            const [editedTask, setEditedTask] = useState({});
 
-  const startEditBudget = () => {
-    setNewBudgetTotal(budget.total);
-    setIsEditingBudget(true);
-  };
+            const [editingExpenseId, setEditingExpenseId] = useState(null);
+            const [editedExpense, setEditedExpense] = useState({});
 
-  const saveBudgetTotal = () => {
-    const updatedBudget = { ...budget, total: Number(newBudgetTotal) };
-    setBudget(updatedBudget);
-    saveData({ budget: updatedBudget });
-    setIsEditingBudget(false);
-  };
+            const [isEditingBudget, setIsEditingBudget] = useState(false);
+            const [newBudgetTotal, setNewBudgetTotal] = useState(0);
 
-  // --- Calculations ---
-  const totalUsed = budget.expenses.reduce((sum, item) => sum + item.amount, 0);
-  const budgetRate = budget.total > 0 ? (totalUsed / budget.total) * 100 : 0;
+            // --- Auth & Data Sync ---
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        // 로컬 환경이나 iframe에서는 Custom Token이 없을 수 있음 -> 익명 로그인 시도
+                        if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
+                            await signInWithCustomToken(auth, window.__initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.warn("Auth failed, falling back to offline mode.");
+                        setIsOffline(true);
+                        setLoading(false);
+                    }
+                };
+                initAuth();
+                
+                return onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        setUser(user);
+                        setIsOffline(false);
+                    } else {
+                        setUser(null);
+                    }
+                });
+            }, []);
 
-  if (loading) return <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400">데이터 로딩중...</div>;
+            useEffect(() => {
+                if (isOffline) {
+                    try {
+                        const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
+                        if (localData) {
+                            const parsed = JSON.parse(localData);
+                            if (parsed.metrics) setMetrics(parsed.metrics);
+                            if (parsed.tasks) setTasks(parsed.tasks);
+                            if (parsed.budget) setBudget(parsed.budget);
+                        }
+                    } catch (e) {
+                        console.warn("Failed to load local data", e);
+                    }
+                    setLoading(false);
+                    return;
+                }
 
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100">
-      
-      {/* HEADER */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">U</div>
-            <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-tight">[3-2] 대학간 교육협력</h1>
-              <p className="text-xs text-slate-500">실적 및 예산 관리 시스템</p>
-            </div>
-          </div>
-          
-          <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
-            <TabButton active={activeTab === 'dashboard'} label="대시보드" onClick={() => setActiveTab('dashboard')} />
-            <TabButton active={activeTab === 'tasks'} label="세부추진과제" onClick={() => setActiveTab('tasks')} />
-            <TabButton active={activeTab === 'budget'} label="예산관리" onClick={() => setActiveTab('budget')} />
-          </div>
+                if (!user) return;
+                
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main');
+                const unsubscribe = onSnapshot(docRef, (snap) => {
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        if (data.metrics && Array.isArray(data.metrics)) setMetrics(data.metrics);
+                        if (data.tasks && Array.isArray(data.tasks)) setTasks(data.tasks);
+                        if (data.budget) setBudget(data.budget);
+                    } else {
+                        setDoc(docRef, { metrics, tasks, budget });
+                    }
+                    setLoading(false);
+                }, (error) => {
+                    console.error("Firebase Snapshot Error:", error);
+                    setIsOffline(true);
+                    setLoading(false);
+                });
 
-          <div className="hidden md:flex items-center gap-3">
-             {saving && <span className="text-xs text-blue-600 animate-pulse">저장 중...</span>}
-             {!saving && <span className="text-xs text-slate-400">{isOffline ? '브라우저 저장' : '자동 저장됨'}</span>}
-             <button onClick={() => saveData()} className={`hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-all ${isOffline ? 'bg-slate-700 hover:bg-slate-800' : 'bg-blue-600'}`}>
-               <Save size={16} /> {isOffline ? '로컬 저장' : '전체 저장'}
-             </button>
-          </div>
-        </div>
-      </header>
+                return () => unsubscribe();
+            }, [user, isOffline]);
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+            const saveData = async (updatedData = {}) => {
+                setSaving(true);
+                
+                const dataToSave = {
+                    metrics: updatedData.metrics || metrics,
+                    tasks: updatedData.tasks || tasks,
+                    budget: updatedData.budget || budget
+                };
 
-        {isOffline && (
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
-            <HardDrive className="text-slate-600 shrink-0 mt-0.5" size={20} />
-            <div>
-              <h3 className="font-bold text-slate-800 text-sm">로컬 저장소 모드</h3>
-              <p className="text-sm text-slate-600 mt-1">
-                서버 연결에 실패하여 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
-                새로고침 하더라도 데이터는 유지되지만, 다른 컴퓨터와 공유되지는 않습니다.
-              </p>
-            </div>
-          </div>
-        )}
+                if (isOffline) {
+                    try {
+                        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+                        setTimeout(() => setSaving(false), 500);
+                    } catch (e) {
+                        console.warn("Local save failed", e);
+                        setSaving(false);
+                    }
+                    return;
+                }
 
-        {/* --- TAB: DASHBOARD (성과지표) --- */}
-        {activeTab === 'dashboard' && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
-              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                <PieChartIcon className="text-blue-600" size={20}/> 지표별 달성 현황
-              </h2>
-              <div className="space-y-4">
-                {metrics.map(metric => {
-                  const current = Number(metric.half1 || 0) + Number(metric.half2 || 0);
-                  const rate = metric.target > 0 ? (current / metric.target) * 100 : 0;
-                  return (
-                    <div key={metric.id}>
-                      <div className="flex justify-between text-sm mb-1.5">
-                        <span className="font-medium text-slate-700">{metric.category} - {metric.name}</span>
-                        <span className="text-slate-500">
-                          <strong className={rate >= 100 ? "text-emerald-600" : "text-blue-600"}>{current.toLocaleString()}</strong> 
-                          / {metric.target.toLocaleString()}{metric.unit} ({rate.toFixed(1)}%)
-                        </span>
-                      </div>
-                      <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-700 ${rate >= 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} 
-                          style={{ width: `${Math.min(rate, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+                if (!user) {
+                    setSaving(false);
+                    return;
+                }
 
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
-                <h3 className="font-bold text-slate-800 text-sm">[지자체/대학] 성과목표 달성율 입력</h3>
-                <span className="text-xs text-slate-500">* 값을 입력하면 합계와 달성률이 실시간으로 변경됩니다.</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-6 py-3 w-24">구분</th>
-                      <th className="px-6 py-3">지표명</th>
-                      <th className="px-6 py-3 w-20 text-center">단위</th>
-                      <th className="px-6 py-3 w-24 text-right">목표(A)</th>
-                      <th className="px-6 py-3 w-32 text-right bg-blue-50/30">상반기</th>
-                      <th className="px-6 py-3 w-32 text-right bg-blue-50/30">하반기</th>
-                      <th className="px-6 py-3 w-24 text-right font-bold text-slate-700">합계(B)</th>
-                      <th className="px-6 py-3 w-24 text-right">달성률</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {metrics.map((m) => {
-                      const total = Number(m.half1 || 0) + Number(m.half2 || 0);
-                      const rate = m.target > 0 ? (total / m.target) * 100 : 0;
-                      return (
-                        <tr key={m.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-6 py-4 font-medium text-slate-900">{m.category}</td>
-                          <td className="px-6 py-4 text-slate-600">{m.name}</td>
-                          <td className="px-6 py-4 text-center text-slate-500">{m.unit}</td>
-                          <td className="px-6 py-4 text-right font-medium">{m.target}</td>
-                          <td className="px-6 py-2 bg-blue-50/10">
-                            <input 
-                              type="number" 
-                              value={m.half1 || ''} 
-                              onChange={(e) => handleMetricChange(m.id, 'half1', e.target.value)}
-                              className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
-                              placeholder="0"
-                            />
-                          </td>
-                          <td className="px-6 py-2 bg-blue-50/10">
-                            <input 
-                              type="number" 
-                              value={m.half2 || ''} 
-                              onChange={(e) => handleMetricChange(m.id, 'half2', e.target.value)}
-                              className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
-                              placeholder="0"
-                            />
-                          </td>
-                          <td className="px-6 py-4 text-right font-bold text-slate-800">{total}</td>
-                          <td className={`px-6 py-4 text-right font-bold ${rate >= 100 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            {rate.toFixed(1)}%
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), dataToSave);
+                } catch (err) {
+                    console.error("Save Error:", err);
+                } finally {
+                    setTimeout(() => setSaving(false), 500);
+                }
+            };
 
-        {/* --- TAB: TASKS (세부추진과제) --- */}
-        {activeTab === 'tasks' && (
-          <div className="space-y-6">
-             
-             {/* Task Input Form */}
-             <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-               <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                 <Plus className="text-blue-600" size={18}/> 신규 과제 등록
-               </h3>
-               <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                 <div className="md:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">분류</label>
-                    <input 
-                      type="text" 
-                      value={newTask.category} 
-                      onChange={(e) => setNewTask({...newTask, category: e.target.value})}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      placeholder="예: 교육과정"
-                    />
-                 </div>
-                 <div className="md:col-span-4">
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">과제명</label>
-                    <input 
-                      type="text" 
-                      value={newTask.title} 
-                      onChange={(e) => setNewTask({...newTask, title: e.target.value})}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      placeholder="과제 이름을 입력하세요"
-                    />
-                 </div>
-                 <div className="md:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">기한</label>
-                    <input 
-                      type="date" 
-                      value={newTask.date} 
-                      onChange={(e) => setNewTask({...newTask, date: e.target.value})}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                    />
-                 </div>
-                 <div className="md:col-span-3">
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">비고</label>
-                    <input 
-                      type="text" 
-                      value={newTask.note} 
-                      onChange={(e) => setNewTask({...newTask, note: e.target.value})}
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                      placeholder="비고 사항"
-                    />
-                 </div>
-                 <div className="md:col-span-1">
-                   <button 
-                    onClick={handleAddTask}
-                    className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors"
-                   >
-                     추가
-                   </button>
-                 </div>
-               </div>
-             </div>
+            // --- Handlers ---
+            const handleMetricChange = (id, field, value) => {
+                const newMetrics = metrics.map(m => m.id === id ? { ...m, [field]: Number(value) } : m);
+                setMetrics(newMetrics);
+                saveData({ metrics: newMetrics });
+            };
 
-             {/* Task List */}
-             <div className="space-y-3">
-               {tasks.map((task) => (
-                 <div key={task.id} className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                   {/* Editing Mode */}
-                   {editingTaskId === task.id ? (
-                      <div className="flex-1 w-full grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <input 
-                          value={editedTask.category} 
-                          onChange={(e) => setEditedTask({...editedTask, category: e.target.value})}
-                          className="px-2 py-1 border rounded text-sm"
-                          placeholder="분류"
-                        />
-                        <input 
-                          value={editedTask.title} 
-                          onChange={(e) => setEditedTask({...editedTask, title: e.target.value})}
-                          className="px-2 py-1 border rounded text-sm md:col-span-2"
-                          placeholder="과제명"
-                        />
-                         <input 
-                          type="date"
-                          value={editedTask.date} 
-                          onChange={(e) => setEditedTask({...editedTask, date: e.target.value})}
-                          className="px-2 py-1 border rounded text-sm"
-                        />
-                         <input 
-                          value={editedTask.note} 
-                          onChange={(e) => setEditedTask({...editedTask, note: e.target.value})}
-                          className="px-2 py-1 border rounded text-sm md:col-span-4"
-                          placeholder="비고"
-                        />
-                        <div className="md:col-span-4 flex gap-2 justify-end mt-2">
-                           <button onClick={saveEditTask} className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
-                             <Check size={14}/> 저장
-                           </button>
-                           <button onClick={cancelEditTask} className="flex items-center gap-1 px-3 py-1 bg-slate-200 text-slate-700 rounded text-sm hover:bg-slate-300">
-                             <X size={14}/> 취소
-                           </button>
-                        </div>
-                      </div>
-                   ) : (
-                      // View Mode
-                      <>
-                        <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-medium">
-                                {task.category || '기타'}
-                              </span>
-                              <span className="text-xs text-slate-400 flex items-center gap-1">
-                                <Calendar size={12}/> {task.date}
-                              </span>
+            const handleAddTask = () => {
+                if (!newTask.title) return;
+                const updatedTasks = [...tasks, { ...newTask, id: Date.now(), status: '예정' }];
+                setTasks(updatedTasks);
+                setNewTask({ category: '', title: '', date: '', note: '' });
+                saveData({ tasks: updatedTasks });
+            };
+
+            const startEditTask = (task) => {
+                setEditingTaskId(task.id);
+                setEditedTask({ ...task });
+            };
+
+            const cancelEditTask = () => {
+                setEditingTaskId(null);
+                setEditedTask({});
+            };
+
+            const saveEditTask = () => {
+                const updatedTasks = tasks.map(t => t.id === editedTask.id ? editedTask : t);
+                setTasks(updatedTasks);
+                saveData({ tasks: updatedTasks });
+                setEditingTaskId(null);
+            };
+
+            const handleDeleteTask = (id) => {
+                if (!window.confirm("정말로 이 과제를 삭제하시겠습니까?")) return;
+                const updatedTasks = tasks.filter(t => t.id !== id);
+                setTasks(updatedTasks);
+                saveData({ tasks: updatedTasks });
+            };
+
+            const handleStatusChange = (id, status) => {
+                const updatedTasks = tasks.map(t => t.id === id ? { ...t, status } : t);
+                setTasks(updatedTasks);
+                saveData({ tasks: updatedTasks });
+            };
+
+            const handleAddExpense = () => {
+                if (!newExpense.item || !newExpense.amount) return;
+                const updatedBudget = {
+                    ...budget,
+                    expenses: [...budget.expenses, { ...newExpense, id: Date.now(), amount: Number(newExpense.amount) }]
+                };
+                setBudget(updatedBudget);
+                setNewExpense({ date: '', item: '', amount: '' });
+                saveData({ budget: updatedBudget });
+            };
+
+            const startEditExpense = (exp) => {
+                setEditingExpenseId(exp.id);
+                setEditedExpense({ ...exp });
+            };
+
+            const cancelEditExpense = () => {
+                setEditingExpenseId(null);
+                setEditedExpense({});
+            };
+
+            const saveEditExpense = () => {
+                const updatedBudget = {
+                    ...budget,
+                    expenses: budget.expenses.map(e => e.id === editedExpense.id ? {...editedExpense, amount: Number(editedExpense.amount)} : e)
+                };
+                setBudget(updatedBudget);
+                saveData({ budget: updatedBudget });
+                setEditingExpenseId(null);
+            };
+
+            const handleDeleteExpense = (id) => {
+                if (!window.confirm("정말로 이 집행내역을 삭제하시겠습니까?")) return;
+                const updatedBudget = {
+                    ...budget,
+                    expenses: budget.expenses.filter(e => e.id !== id)
+                };
+                setBudget(updatedBudget);
+                saveData({ budget: updatedBudget });
+            };
+
+            const startEditBudget = () => {
+                setNewBudgetTotal(budget.total);
+                setIsEditingBudget(true);
+            };
+
+            const saveBudgetTotal = () => {
+                const updatedBudget = { ...budget, total: Number(newBudgetTotal) };
+                setBudget(updatedBudget);
+                saveData({ budget: updatedBudget });
+                setIsEditingBudget(false);
+            };
+
+            const totalUsed = budget.expenses.reduce((sum, item) => sum + item.amount, 0);
+            const budgetRate = budget.total > 0 ? (totalUsed / budget.total) * 100 : 0;
+
+            if (loading) return <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400">데이터 로딩중...</div>;
+
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-100">
+                    {/* HEADER */}
+                    <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">U</div>
+                                <div>
+                                    <h1 className="text-lg font-bold text-slate-900 leading-tight">[3-2] 대학간 교육협력</h1>
+                                    <p className="text-xs text-slate-500">실적 및 예산 관리 시스템</p>
+                                </div>
                             </div>
-                            <h4 className="font-medium text-slate-900">{task.title}</h4>
-                            {task.note && <p className="text-sm text-slate-500 mt-1">비고: {task.note}</p>}
-                        </div>
-                        
-                        <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
-                            <StatusBadge 
-                              status={task.status} 
-                              onClick={(s) => handleStatusChange(task.id, s)}
-                            />
-                            <div className="flex items-center gap-1">
-                              <button 
-                                onClick={() => startEditTask(task)}
-                                className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
-                                title="수정"
-                              >
-                                <Edit2 size={16} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteTask(task.id)}
-                                className="p-2 text-slate-400 hover:text-rose-500 transition-colors"
-                                title="삭제"
-                              >
-                                <Trash2 size={16} />
-                              </button>
+                            
+                            <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
+                                <TabButton active={activeTab === 'dashboard'} label="대시보드" onClick={() => setActiveTab('dashboard')} />
+                                <TabButton active={activeTab === 'tasks'} label="세부추진과제" onClick={() => setActiveTab('tasks')} />
+                                <TabButton active={activeTab === 'budget'} label="예산관리" onClick={() => setActiveTab('budget')} />
+                            </div>
+
+                            <div className="hidden md:flex items-center gap-3">
+                                {saving && <span className="text-xs text-blue-600 animate-pulse">저장 중...</span>}
+                                {!saving && <span className="text-xs text-slate-400">{isOffline ? '브라우저 저장' : '자동 저장됨'}</span>}
+                                <button onClick={() => saveData()} className={`hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-all ${isOffline ? 'bg-slate-700 hover:bg-slate-800' : 'bg-blue-600'}`}>
+                                    <Save size={16} /> {isOffline ? '로컬 저장' : '전체 저장'}
+                                </button>
                             </div>
                         </div>
-                      </>
-                   )}
-                 </div>
-               ))}
-               
-               {tasks.length === 0 && (
-                 <div className="text-center py-12 bg-white rounded-xl border border-slate-200 text-slate-400">
-                   등록된 추진 과제가 없습니다.
-                 </div>
-               )}
-             </div>
-          </div>
-        )}
+                    </header>
 
-        {/* --- TAB: BUDGET (예산관리) --- */}
-        {activeTab === 'budget' && (
-          <div className="space-y-6">
-            
-            {/* Budget Summary Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-               {/* Total Budget Card - UPDATED */}
-               <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-center h-32 relative group">
-                 <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm text-slate-500 font-bold">총 예산</span>
-                    {!isEditingBudget && (
-                       <button 
-                        onClick={startEditBudget}
-                        className="px-2 py-0.5 text-xs border border-slate-300 rounded bg-white text-slate-600 hover:bg-slate-50 transition-colors"
-                       >
-                         수정
-                       </button>
-                    )}
-                 </div>
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+                        {isOffline && (
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
+                                <HardDrive className="text-slate-600 shrink-0 mt-0.5" size={20} />
+                                <div>
+                                    <h3 className="font-bold text-slate-800 text-sm">로컬 저장소 모드</h3>
+                                    <p className="text-sm text-slate-600 mt-1">
+                                        서버 연결에 실패하여 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
+                                        새로고침 하더라도 데이터는 유지되지만, 다른 컴퓨터와 공유되지는 않습니다.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
 
-                 {isEditingBudget ? (
-                    <div className="flex items-center gap-2">
-                      <input 
-                        type="number"
-                        value={newBudgetTotal}
-                        onChange={(e) => setNewBudgetTotal(e.target.value)}
-                        className="w-32 px-2 py-1 text-xl font-bold border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-center"
-                        autoFocus
-                      />
-                      <div className="flex gap-1">
-                        <button onClick={saveBudgetTotal} className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700">
-                            <Check size={14} />
-                        </button>
-                        <button onClick={() => setIsEditingBudget(false)} className="p-1 bg-slate-200 text-slate-600 rounded hover:bg-slate-300">
-                            <X size={14} />
-                        </button>
-                      </div>
-                    </div>
-                 ) : (
-                    <div className="text-2xl font-bold text-slate-800">
-                       {formatNumber(budget.total)} <span className="text-lg font-normal text-slate-500">천원</span>
-                    </div>
-                 )}
-               </div>
+                        {/* VIEW: DASHBOARD */}
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
+                                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                        <PieChartIcon className="text-blue-600" size={20}/> 지표별 달성 현황
+                                    </h2>
+                                    <div className="space-y-4">
+                                        {metrics.map(metric => {
+                                            const current = Number(metric.half1 || 0) + Number(metric.half2 || 0);
+                                            const rate = metric.target > 0 ? (current / metric.target) * 100 : 0;
+                                            return (
+                                                <div key={metric.id}>
+                                                    <div className="flex justify-between text-sm mb-1.5">
+                                                        <span className="font-medium text-slate-700">{metric.category} - {metric.name}</span>
+                                                        <span className="text-slate-500">
+                                                            <strong className={rate >= 100 ? "text-emerald-600" : "text-blue-600"}>{current.toLocaleString()}</strong> 
+                                                            / {metric.target.toLocaleString()}{metric.unit} ({rate.toFixed(1)}%)
+                                                        </span>
+                                                    </div>
+                                                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                                                        <div 
+                                                            className={`h-full rounded-full transition-all duration-700 ${rate >= 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} 
+                                                            style={{ width: `${Math.min(rate, 100)}%` }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
 
-               {/* Executed Amount - Centered */}
-               <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 shadow-sm flex flex-col justify-center items-center h-32 gap-1">
-                 <span className="text-sm text-blue-600 font-bold">집행액</span>
-                 <div className="text-2xl font-bold text-blue-700">{formatNumber(totalUsed)} <span className="text-base font-normal text-blue-500">천원</span></div>
-               </div>
+                                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/50 flex justify-between items-center">
+                                        <h3 className="font-bold text-slate-800 text-sm">[지자체/대학] 성과목표 달성율 입력</h3>
+                                        <span className="text-xs text-slate-500">* 값을 입력하면 합계와 달성률이 실시간으로 변경됩니다.</span>
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                                                <tr>
+                                                    <th className="px-6 py-3 w-24">구분</th>
+                                                    <th className="px-6 py-3">지표명</th>
+                                                    <th className="px-6 py-3 w-20 text-center">단위</th>
+                                                    <th className="px-6 py-3 w-24 text-right">목표(A)</th>
+                                                    <th className="px-6 py-3 w-32 text-right bg-blue-50/30">상반기</th>
+                                                    <th className="px-6 py-3 w-32 text-right bg-blue-50/30">하반기</th>
+                                                    <th className="px-6 py-3 w-24 text-right font-bold text-slate-700">합계(B)</th>
+                                                    <th className="px-6 py-3 w-24 text-right">달성률</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {metrics.map((m) => {
+                                                    const total = Number(m.half1 || 0) + Number(m.half2 || 0);
+                                                    const rate = m.target > 0 ? (total / m.target) * 100 : 0;
+                                                    return (
+                                                        <tr key={m.id} className="hover:bg-slate-50 transition-colors">
+                                                            <td className="px-6 py-4 font-medium text-slate-900">{m.category}</td>
+                                                            <td className="px-6 py-4 text-slate-600">{m.name}</td>
+                                                            <td className="px-6 py-4 text-center text-slate-500">{m.unit}</td>
+                                                            <td className="px-6 py-4 text-right font-medium">{m.target}</td>
+                                                            <td className="px-6 py-2 bg-blue-50/10">
+                                                                <input 
+                                                                    type="number" 
+                                                                    value={m.half1 ?? ''} 
+                                                                    onChange={(e) => handleMetricChange(m.id, 'half1', e.target.value)}
+                                                                    className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
+                                                                    placeholder="0"
+                                                                />
+                                                            </td>
+                                                            <td className="px-6 py-2 bg-blue-50/10">
+                                                                <input 
+                                                                    type="number" 
+                                                                    value={m.half2 ?? ''} 
+                                                                    onChange={(e) => handleMetricChange(m.id, 'half2', e.target.value)}
+                                                                    className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
+                                                                    placeholder="0"
+                                                                />
+                                                            </td>
+                                                            <td className="px-6 py-4 text-right font-bold text-slate-800">{total}</td>
+                                                            <td className={`px-6 py-4 text-right font-bold ${rate >= 100 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                                                {rate.toFixed(1)}%
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
-               {/* Balance - Centered with Percentage */}
-               <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 shadow-sm flex flex-col justify-center items-center h-32 gap-1">
-                 <span className="text-sm text-emerald-600 font-bold">잔액 ({(100 - budgetRate).toFixed(1)}%)</span>
-                 <div className="text-2xl font-bold text-emerald-700">{formatNumber(budget.total - totalUsed)} <span className="text-base font-normal text-emerald-500">천원</span></div>
-               </div>
-            </div>
+                        {/* VIEW: TASKS */}
+                        {activeTab === 'tasks' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+                                    <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                        <Plus className="text-blue-600" size={18}/> 신규 과제 등록
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                                        <div className="md:col-span-2">
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">분류</label>
+                                            <input 
+                                                type="text" 
+                                                value={newTask.category} 
+                                                onChange={(e) => setNewTask({...newTask, category: e.target.value})}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                placeholder="예: 교육과정"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-4">
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">과제명</label>
+                                            <input 
+                                                type="text" 
+                                                value={newTask.title} 
+                                                onChange={(e) => setNewTask({...newTask, title: e.target.value})}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                placeholder="과제명 입력"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">기한</label>
+                                            <input 
+                                                type="date" 
+                                                value={newTask.date} 
+                                                onChange={(e) => setNewTask({...newTask, date: e.target.value})}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-3">
+                                            <label className="block text-xs font-semibold text-slate-500 mb-1">비고</label>
+                                            <input 
+                                                type="text" 
+                                                value={newTask.note} 
+                                                onChange={(e) => setNewTask({...newTask, note: e.target.value})}
+                                                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                placeholder="비고 사항"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-1">
+                                            <button 
+                                                onClick={handleAddTask}
+                                                className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors"
+                                            >
+                                                추가
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
 
-            {/* Progress Bar Section - NEW */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-end mb-2">
-                    <span className="text-xs font-bold text-slate-600">집행률</span>
-                    <span className="text-xs font-bold text-slate-600">{budgetRate.toFixed(1)}%</span>
+                                <div className="space-y-3">
+                                    {tasks.map((task) => (
+                                        <div key={task.id} className="bg-white rounded-lg border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                                            {editingTaskId === task.id ? (
+                                                <div className="flex-1 w-full grid grid-cols-1 md:grid-cols-4 gap-3">
+                                                    <input 
+                                                        value={editedTask.category || ''} 
+                                                        onChange={(e) => setEditedTask({...editedTask, category: e.target.value})}
+                                                        className="px-2 py-1 border rounded text-sm"
+                                                        placeholder="분류"
+                                                    />
+                                                    <input 
+                                                        value={editedTask.title || ''} 
+                                                        onChange={(e) => setEditedTask({...editedTask, title: e.target.value})}
+                                                        className="px-2 py-1 border rounded text-sm md:col-span-2"
+                                                        placeholder="과제명"
+                                                    />
+                                                    <input 
+                                                        type="date"
+                                                        value={editedTask.date || ''} 
+                                                        onChange={(e) => setEditedTask({...editedTask, date: e.target.value})}
+                                                        className="px-2 py-1 border rounded text-sm"
+                                                    />
+                                                    <input 
+                                                        value={editedTask.note || ''} 
+                                                        onChange={(e) => setEditedTask({...editedTask, note: e.target.value})}
+                                                        className="px-2 py-1 border rounded text-sm md:col-span-4"
+                                                        placeholder="비고"
+                                                    />
+                                                    <div className="md:col-span-4 flex gap-2 justify-end mt-2">
+                                                        <button onClick={saveEditTask} className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+                                                            <Check size={14}/> 저장
+                                                        </button>
+                                                        <button onClick={cancelEditTask} className="flex items-center gap-1 px-3 py-1 bg-slate-200 text-slate-700 rounded text-sm hover:bg-slate-300">
+                                                            <X size={14}/> 취소
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="flex-1">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <span className="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-600 border border-slate-200 font-medium">
+                                                                {task.category || '기타'}
+                                                            </span>
+                                                            <span className="text-xs text-slate-400 flex items-center gap-1">
+                                                                <Calendar size={12}/> {task.date}
+                                                            </span>
+                                                        </div>
+                                                        <h4 className="font-medium text-slate-900">{task.title}</h4>
+                                                        {task.note && <p className="text-sm text-slate-500 mt-1">비고: {task.note}</p>}
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                                                        <StatusBadge 
+                                                            status={task.status} 
+                                                            onClick={(s) => handleStatusChange(task.id, s)}
+                                                        />
+                                                        <div className="flex items-center gap-1">
+                                                            <button 
+                                                                onClick={() => startEditTask(task)}
+                                                                className="p-2 text-slate-400 hover:text-blue-600 transition-colors"
+                                                                title="수정"
+                                                            >
+                                                                <Edit2 size={16} />
+                                                            </button>
+                                                            <button 
+                                                                onClick={() => handleDeleteTask(task.id)}
+                                                                className="p-2 text-slate-400 hover:text-rose-500 transition-colors"
+                                                                title="삭제"
+                                                            >
+                                                                <Trash2 size={16} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {tasks.length === 0 && (
+                                        <div className="text-center py-12 bg-white rounded-xl border border-slate-200 text-slate-400">
+                                            등록된 추진 과제가 없습니다.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* VIEW: BUDGET */}
+                        {activeTab === 'budget' && (
+                            <div className="space-y-6 animate-fade-in">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-center items-center h-32 relative group">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-sm text-slate-500 font-bold">총 예산</span>
+                                            {!isEditingBudget && (
+                                                <button 
+                                                    onClick={startEditBudget}
+                                                    className="px-2 py-0.5 text-xs border border-slate-300 rounded bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                                                >
+                                                    수정
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {isEditingBudget ? (
+                                            <div className="flex items-center gap-2">
+                                                <input 
+                                                    type="number"
+                                                    value={newBudgetTotal ?? ''} 
+                                                    onChange={(e) => setNewBudgetTotal(e.target.value)}
+                                                    className="w-32 px-2 py-1 text-xl font-bold border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-center"
+                                                    autoFocus
+                                                />
+                                                <div className="flex gap-1">
+                                                    <button onClick={saveBudgetTotal} className="p-1 bg-blue-600 text-white rounded hover:bg-blue-700"><Check size={14}/></button>
+                                                    <button onClick={() => setIsEditingBudget(false)} className="p-1 bg-slate-200 text-slate-600 rounded hover:bg-slate-300"><X size={14}/></button>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-2xl font-bold text-slate-800">
+                                                {formatNumber(budget.total)} <span className="text-lg font-normal text-slate-500">천원</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="bg-blue-50 p-6 rounded-xl border border-blue-100 shadow-sm flex flex-col justify-center items-center h-32 gap-1">
+                                        <span className="text-sm text-blue-600 font-bold">집행액</span>
+                                        <div className="text-2xl font-bold text-blue-700">{formatNumber(totalUsed)} <span className="text-base font-normal text-blue-500">천원</span></div>
+                                    </div>
+
+                                    <div className="bg-emerald-50 p-6 rounded-xl border border-emerald-100 shadow-sm flex flex-col justify-center items-center h-32 gap-1">
+                                        <span className="text-sm text-emerald-600 font-bold">잔액 ({(100 - budgetRate).toFixed(1)}%)</span>
+                                        <div className="text-2xl font-bold text-emerald-700">{formatNumber(budget.total - totalUsed)} <span className="text-base font-normal text-emerald-500">천원</span></div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                                    <div className="flex justify-between items-end mb-2">
+                                        <span className="text-xs font-bold text-slate-600">집행률</span>
+                                        <span className="text-xs font-bold text-slate-600">{budgetRate.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+                                        <div 
+                                            className="h-full bg-blue-600 rounded-full transition-all duration-500" 
+                                            style={{ width: `${Math.min(budgetRate, 100)}%` }}
+                                        ></div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+                                        <h3 className="font-bold text-slate-800 mb-4">집행 내역 등록</h3>
+                                        <div className="flex flex-col md:flex-row gap-3">
+                                            <input 
+                                                type="date"
+                                                value={newExpense.date}
+                                                onChange={(e) => setNewExpense({...newExpense, date: e.target.value})}
+                                                className="px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <input 
+                                                type="text"
+                                                placeholder="항목명 (예: 회의비)"
+                                                value={newExpense.item}
+                                                onChange={(e) => setNewExpense({...newExpense, item: e.target.value})}
+                                                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                            <div className="relative">
+                                                <input 
+                                                    type="number"
+                                                    placeholder="금액 (천원)"
+                                                    value={newExpense.amount}
+                                                    onChange={(e) => setNewExpense({...newExpense, amount: e.target.value})}
+                                                    className="w-40 px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 text-right pr-12"
+                                                />
+                                                <span className="absolute right-3 top-2 text-sm text-slate-500">천원</span>
+                                            </div>
+                                            <button 
+                                                onClick={handleAddExpense}
+                                                className="bg-slate-800 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors"
+                                            >
+                                                등록
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                                                <tr>
+                                                    <th className="px-6 py-3 w-32">일자</th>
+                                                    <th className="px-6 py-3">항목</th>
+                                                    <th className="px-6 py-3 text-right">금액 (천원)</th>
+                                                    <th className="px-6 py-3 w-28 text-center">관리</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                                {[...budget.expenses].sort((a,b) => new Date(b.date) - new Date(a.date)).map((exp) => (
+                                                    <tr key={exp.id} className="hover:bg-slate-50">
+                                                        {editingExpenseId === exp.id ? (
+                                                            <>
+                                                                <td className="px-6 py-4">
+                                                                    <input 
+                                                                        type="date"
+                                                                        value={editedExpense.date || ''} 
+                                                                        onChange={(e) => setEditedExpense({...editedExpense, date: e.target.value})}
+                                                                        className="w-full px-2 py-1 border rounded text-xs"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-6 py-4">
+                                                                    <input 
+                                                                        value={editedExpense.item || ''} 
+                                                                        onChange={(e) => setEditedExpense({...editedExpense, item: e.target.value})}
+                                                                        className="w-full px-2 py-1 border rounded text-xs"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-6 py-4">
+                                                                    <input 
+                                                                        type="number"
+                                                                        value={editedExpense.amount || ''} 
+                                                                        onChange={(e) => setEditedExpense({...editedExpense, amount: e.target.value})}
+                                                                        className="w-full px-2 py-1 border rounded text-xs text-right"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-6 py-4 text-center">
+                                                                    <div className="flex justify-center gap-1">
+                                                                        <button onClick={saveEditExpense} className="p-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200"><Check size={14}/></button>
+                                                                        <button onClick={cancelEditExpense} className="p-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200"><X size={14}/></button>
+                                                                    </div>
+                                                                </td>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <td className="px-6 py-4 text-slate-600">{exp.date}</td>
+                                                                <td className="px-6 py-4 font-medium text-slate-800">{exp.item}</td>
+                                                                <td className="px-6 py-4 text-right text-slate-700">{formatNumber(exp.amount)}</td>
+                                                                <td className="px-6 py-4 text-center">
+                                                                    <div className="flex justify-center gap-1">
+                                                                        <button onClick={() => startEditExpense(exp)} className="text-slate-400 hover:text-blue-500 p-1"><Edit2 size={16} /></button>
+                                                                        <button onClick={() => handleDeleteExpense(exp.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={16} /></button>
+                                                                    </div>
+                                                                </td>
+                                                            </>
+                                                        )}
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
                 </div>
-                <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-                    <div 
-                        className="h-full bg-blue-600 rounded-full transition-all duration-500" 
-                        style={{ width: `${Math.min(budgetRate, 100)}%` }}
-                    ></div>
-                </div>
-            </div>
+            );
+        }
 
-            {/* Expense Input & List */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                  <h3 className="font-bold text-slate-800 mb-4">집행 내역 등록</h3>
-                  <div className="flex flex-col md:flex-row gap-3">
-                    <input 
-                      type="date"
-                      value={newExpense.date}
-                      onChange={(e) => setNewExpense({...newExpense, date: e.target.value})}
-                      className="px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <input 
-                      type="text"
-                      placeholder="항목명 (예: 회의비)"
-                      value={newExpense.item}
-                      onChange={(e) => setNewExpense({...newExpense, item: e.target.value})}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <div className="relative">
-                      <input 
-                        type="number"
-                        placeholder="금액 (천원)"
-                        value={newExpense.amount}
-                        onChange={(e) => setNewExpense({...newExpense, amount: e.target.value})}
-                        className="w-40 px-3 py-2 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 text-right pr-12"
-                      />
-                      <span className="absolute right-3 top-2 text-sm text-slate-500">천원</span>
-                    </div>
-                    <button 
-                      onClick={handleAddExpense}
-                      className="bg-slate-800 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors"
-                    >
-                      등록
-                    </button>
-                  </div>
-               </div>
-               
-               <div className="overflow-x-auto">
-                 <table className="w-full text-sm text-left">
-                   <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
-                     <tr>
-                       <th className="px-6 py-3 w-32">일자</th>
-                       <th className="px-6 py-3">항목</th>
-                       <th className="px-6 py-3 text-right">금액 (천원)</th>
-                       <th className="px-6 py-3 w-28 text-center">관리</th>
-                     </tr>
-                   </thead>
-                   <tbody className="divide-y divide-slate-100">
-                     {[...budget.expenses].sort((a,b) => new Date(b.date) - new Date(a.date)).map((exp) => (
-                       <tr key={exp.id} className="hover:bg-slate-50">
-                         {editingExpenseId === exp.id ? (
-                           <>
-                             <td className="px-6 py-4">
-                               <input 
-                                 type="date"
-                                 value={editedExpense.date}
-                                 onChange={(e) => setEditedExpense({...editedExpense, date: e.target.value})}
-                                 className="w-full px-2 py-1 border rounded text-xs"
-                               />
-                             </td>
-                             <td className="px-6 py-4">
-                               <input 
-                                 value={editedExpense.item}
-                                 onChange={(e) => setEditedExpense({...editedExpense, item: e.target.value})}
-                                 className="w-full px-2 py-1 border rounded text-xs"
-                               />
-                             </td>
-                             <td className="px-6 py-4">
-                               <input 
-                                 type="number"
-                                 value={editedExpense.amount}
-                                 onChange={(e) => setEditedExpense({...editedExpense, amount: e.target.value})}
-                                 className="w-full px-2 py-1 border rounded text-xs text-right"
-                               />
-                             </td>
-                             <td className="px-6 py-4 text-center">
-                               <div className="flex justify-center gap-1">
-                                 <button onClick={saveEditExpense} className="p-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200"><Check size={14}/></button>
-                                 <button onClick={cancelEditExpense} className="p-1 bg-slate-100 text-slate-600 rounded hover:bg-slate-200"><X size={14}/></button>
-                               </div>
-                             </td>
-                           </>
-                         ) : (
-                           <>
-                            <td className="px-6 py-4 text-slate-600">{exp.date}</td>
-                            <td className="px-6 py-4 font-medium text-slate-800">{exp.item}</td>
-                            <td className="px-6 py-4 text-right text-slate-700">{formatNumber(exp.amount)}</td>
-                            <td className="px-6 py-4 text-center">
-                              <div className="flex justify-center gap-1">
-                                <button 
-                                  onClick={() => startEditExpense(exp)}
-                                  className="text-slate-400 hover:text-blue-500 p-1"
-                                >
-                                  <Edit2 size={16} />
-                                </button>
-                                <button 
-                                  onClick={() => handleDeleteExpense(exp.id)}
-                                  className="text-slate-400 hover:text-rose-500 p-1"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            </td>
-                           </>
-                         )}
-                       </tr>
-                     ))}
-                     {budget.expenses.length === 0 && (
-                       <tr>
-                         <td colSpan="4" className="px-6 py-12 text-center text-slate-400">집행 내역이 없습니다.</td>
-                       </tr>
-                     )}
-                   </tbody>
-                 </table>
-               </div>
-            </div>
-          </div>
-        )}
-
-      </main>
-    </div>
-  );
-}
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
