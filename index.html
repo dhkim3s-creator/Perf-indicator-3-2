@@ -132,7 +132,7 @@
             const [user, setUser] = useState(null);
             const [loading, setLoading] = useState(true);
             const [isOffline, setIsOffline] = useState(false);
-            const [authError, setAuthError] = useState(null); // 추가: 인증 에러 상태 저장
+            const [authError, setAuthError] = useState(null);
             const [activeTab, setActiveTab] = useState('dashboard');
             const [saving, setSaving] = useState(false);
 
@@ -182,7 +182,6 @@
             useEffect(() => {
                 const initAuth = async () => {
                     try {
-                        // 로컬 환경이나 iframe에서는 Custom Token이 없을 수 있음 -> 익명 로그인 시도
                         if (typeof window.__initial_auth_token !== 'undefined' && window.__initial_auth_token) {
                             await signInWithCustomToken(auth, window.__initial_auth_token);
                         } else {
@@ -190,7 +189,7 @@
                         }
                     } catch (error) {
                         console.log("Firebase Auth skipped. Switched to Local Storage mode. Error:", error.code);
-                        setAuthError(error.code); // 에러 코드 저장
+                        setAuthError(error.code);
                         setIsOffline(true);
                         setLoading(false);
                     }
@@ -255,13 +254,23 @@
                     budget: updatedData.budget || budget
                 };
 
+                // Helper to enforce timeout for cloud operations
+                const setDocWithTimeout = (docRef, data, timeoutMs) => {
+                    return Promise.race([
+                        setDoc(docRef, data),
+                        new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Timeout')), timeoutMs)
+                        )
+                    ]);
+                };
+
                 if (isOffline) {
                     try {
                         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
-                        setTimeout(() => setSaving(false), 500);
                     } catch (e) {
                         console.log("Local save failed");
-                        setSaving(false);
+                    } finally {
+                        setTimeout(() => setSaving(false), 500);
                     }
                     return;
                 }
@@ -272,10 +281,15 @@
                 }
 
                 try {
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), dataToSave);
+                    // Try cloud save with 3-second timeout to prevent "stuck" UI
+                    await setDocWithTimeout(
+                        doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), 
+                        dataToSave, 
+                        3000
+                    );
                 } catch (err) {
-                    console.log("Cloud save failed, trying local");
-                    setIsOffline(true);
+                    console.log("Cloud save failed or timed out, switching to offline mode for this session.", err);
+                    setIsOffline(true); // Switch to offline to prevent further lags
                     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
                 } finally {
                     setTimeout(() => setSaving(false), 500);
