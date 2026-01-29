@@ -71,7 +71,7 @@
             projectId: "perf-indicator-3-2",
             storageBucket: "perf-indicator-3-2.firebasestorage.app",
             messagingSenderId: "123844484790",
-            appId: "1:123844484790:web:712b616ea6dbcf53e79017"
+            appId: "1:123844484790:web:7f3f2acbfc689241e79017"
         };
 
         const app = initializeApp(firebaseConfig);
@@ -132,6 +132,7 @@
             const [user, setUser] = useState(null);
             const [loading, setLoading] = useState(true);
             const [isOffline, setIsOffline] = useState(false);
+            const [authError, setAuthError] = useState(null); // 추가: 인증 에러 상태 저장
             const [activeTab, setActiveTab] = useState('dashboard');
             const [saving, setSaving] = useState(false);
 
@@ -188,7 +189,8 @@
                             await signInAnonymously(auth);
                         }
                     } catch (error) {
-                        console.log("Firebase Auth skipped. Switched to Local Storage mode.");
+                        console.log("Firebase Auth skipped. Switched to Local Storage mode. Error:", error.code);
+                        setAuthError(error.code); // 에러 코드 저장
                         setIsOffline(true);
                         setLoading(false);
                     }
@@ -417,11 +419,21 @@
                             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
                                 <HardDrive className="text-blue-600 shrink-0 mt-0.5" size={20} />
                                 <div>
-                                    <h3 className="font-bold text-blue-900 text-sm">로컬 저장소 모드</h3>
-                                    <p className="text-sm text-blue-700 mt-1">
-                                        서버 연결이 원활하지 않아 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
-                                        입력한 데이터는 현재 브라우저에 안전하게 저장됩니다.
-                                    </p>
+                                    <h3 className="font-bold text-blue-900 text-sm">
+                                        {authError === 'auth/configuration-not-found' ? 'Firebase 설정 필요 (익명 로그인)' : '로컬 저장소 모드'}
+                                    </h3>
+                                    {authError === 'auth/configuration-not-found' ? (
+                                        <p className="text-sm text-blue-700 mt-1">
+                                            Firebase 콘솔의 <strong>Authentication > Sign-in method</strong> 탭에서<br/> 
+                                            <strong>Anonymous (익명)</strong> 로그인을 활성화(Enable)해야 클라우드 저장이 가능합니다.<br/>
+                                            <span className="text-xs text-blue-500 mt-1 block">* 현재는 데이터가 이 컴퓨터(브라우저)에만 저장됩니다.</span>
+                                        </p>
+                                    ) : (
+                                        <p className="text-sm text-blue-700 mt-1">
+                                            서버 연결이 원활하지 않아 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
+                                            입력한 데이터는 현재 브라우저에 안전하게 저장됩니다.
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                         )}
