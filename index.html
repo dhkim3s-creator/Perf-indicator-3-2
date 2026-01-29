@@ -15,7 +15,7 @@ import {
 import { 
   Save, LayoutDashboard, Calendar, PieChart as PieChartIcon, 
   CheckCircle2, AlertCircle, Plus, Trash2, Edit2, Search, 
-  Building, Users, Coins, Menu, X, ChevronRight, Check, AlertTriangle, ExternalLink, WifiOff
+  Building, Users, Coins, Menu, X, ChevronRight, Check, AlertTriangle, ExternalLink, WifiOff, HardDrive
 } from 'lucide-react';
 
 // --- Firebase Configuration ---
@@ -34,6 +34,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 // Use a consistent app ID for Firestore paths (separate from Firebase Config appId)
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'univ-coop-project-v2';
+const LOCAL_STORAGE_KEY = `univ_coop_data_${appId}`;
 
 // --- Utility Functions ---
 const formatNumber = (num) => {
@@ -144,7 +145,7 @@ export default function App() {
           await signInAnonymously(auth);
         }
       } catch (error) {
-        console.error("Auth failed, falling back to offline mode:", error);
+        console.warn("Auth failed, falling back to offline mode.");
         setIsOffline(true);
         setLoading(false);
       }
@@ -161,8 +162,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // If offline, just stop loading and use default state
+    // If offline, try to load from localStorage
     if (isOffline) {
+      try {
+        const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
+        if (localData) {
+          const parsed = JSON.parse(localData);
+          if (parsed.metrics) setMetrics(parsed.metrics);
+          if (parsed.tasks) setTasks(parsed.tasks);
+          if (parsed.budget) setBudget(parsed.budget);
+        }
+      } catch (e) {
+        console.warn("Failed to load local data", e);
+      }
       setLoading(false);
       return;
     }
@@ -193,9 +205,20 @@ export default function App() {
   const saveData = async (updatedData = {}) => {
     setSaving(true);
     
-    // In offline mode, we just simulate a save delay
+    const dataToSave = {
+      metrics: updatedData.metrics || metrics,
+      tasks: updatedData.tasks || tasks,
+      budget: updatedData.budget || budget
+    };
+
     if (isOffline) {
-      setTimeout(() => setSaving(false), 500);
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+        setTimeout(() => setSaving(false), 500);
+      } catch (e) {
+        console.warn("Local save failed", e);
+        setSaving(false);
+      }
       return;
     }
 
@@ -204,11 +227,6 @@ export default function App() {
       return;
     }
 
-    const dataToSave = {
-      metrics: updatedData.metrics || metrics,
-      tasks: updatedData.tasks || tasks,
-      budget: updatedData.budget || budget
-    };
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), dataToSave);
     } catch (err) {
@@ -346,8 +364,8 @@ export default function App() {
 
           <div className="hidden md:flex items-center gap-3">
              {saving && <span className="text-xs text-blue-600 animate-pulse">저장 중...</span>}
-             {!saving && <span className="text-xs text-slate-400">{isOffline ? '오프라인 저장' : '자동 저장됨'}</span>}
-             <button onClick={() => saveData()} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-all">
+             {!saving && <span className="text-xs text-slate-400">{isOffline ? '브라우저 저장' : '자동 저장됨'}</span>}
+             <button onClick={() => saveData()} className={`hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-all ${isOffline ? 'bg-slate-700 hover:bg-slate-800' : 'bg-blue-600'}`}>
                <Save size={16} /> {isOffline ? '로컬 저장' : '전체 저장'}
              </button>
           </div>
@@ -357,13 +375,13 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
 
         {isOffline && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
-            <WifiOff className="text-amber-600 shrink-0 mt-0.5" size={20} />
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
+            <HardDrive className="text-slate-600 shrink-0 mt-0.5" size={20} />
             <div>
-              <h3 className="font-bold text-amber-800 text-sm">오프라인 데모 모드</h3>
-              <p className="text-sm text-amber-700 mt-1">
-                Firebase 인증 서버 연결에 실패하여 오프라인 모드로 실행됩니다. <br/>
-                데이터는 현재 브라우저 세션에만 유지되며, <strong>새로고침 시 초기화</strong>될 수 있습니다.
+              <h3 className="font-bold text-slate-800 text-sm">로컬 저장소 모드</h3>
+              <p className="text-sm text-slate-600 mt-1">
+                서버 연결에 실패하여 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
+                새로고침 하더라도 데이터는 유지되지만, 다른 컴퓨터와 공유되지는 않습니다.
               </p>
             </div>
           </div>
