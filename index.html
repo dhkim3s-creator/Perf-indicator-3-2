@@ -20,7 +20,7 @@
             "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
             "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
             "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
-            "lucide-react": "https://esm.sh/lucide-react@0.344.0"
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react"
         }
     }
     </script>
@@ -188,7 +188,7 @@
                             await signInAnonymously(auth);
                         }
                     } catch (error) {
-                        console.warn("Auth failed, falling back to offline mode.");
+                        console.log("Firebase Auth skipped. Switched to Local Storage mode.");
                         setIsOffline(true);
                         setLoading(false);
                     }
@@ -216,7 +216,7 @@
                             if (parsed.budget) setBudget(parsed.budget);
                         }
                     } catch (e) {
-                        console.warn("Failed to load local data", e);
+                        console.log("No local data found, using defaults.");
                     }
                     setLoading(false);
                     return;
@@ -236,7 +236,7 @@
                     }
                     setLoading(false);
                 }, (error) => {
-                    console.error("Firebase Snapshot Error:", error);
+                    console.log("Firebase Snapshot failed, using offline mode.");
                     setIsOffline(true);
                     setLoading(false);
                 });
@@ -258,7 +258,7 @@
                         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
                         setTimeout(() => setSaving(false), 500);
                     } catch (e) {
-                        console.warn("Local save failed", e);
+                        console.log("Local save failed");
                         setSaving(false);
                     }
                     return;
@@ -272,7 +272,9 @@
                 try {
                     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), dataToSave);
                 } catch (err) {
-                    console.error("Save Error:", err);
+                    console.log("Cloud save failed, trying local");
+                    setIsOffline(true);
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
                 } finally {
                     setTimeout(() => setSaving(false), 500);
                 }
@@ -412,13 +414,13 @@
 
                     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
                         {isOffline && (
-                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
-                                <HardDrive className="text-slate-600 shrink-0 mt-0.5" size={20} />
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3 shadow-sm animate-fade-in">
+                                <HardDrive className="text-blue-600 shrink-0 mt-0.5" size={20} />
                                 <div>
-                                    <h3 className="font-bold text-slate-800 text-sm">로컬 저장소 모드</h3>
-                                    <p className="text-sm text-slate-600 mt-1">
-                                        서버 연결에 실패하여 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
-                                        새로고침 하더라도 데이터는 유지되지만, 다른 컴퓨터와 공유되지는 않습니다.
+                                    <h3 className="font-bold text-blue-900 text-sm">로컬 저장소 모드</h3>
+                                    <p className="text-sm text-blue-700 mt-1">
+                                        서버 연결이 원활하지 않아 <strong>내 컴퓨터(브라우저)</strong>에 데이터를 저장합니다. <br/>
+                                        입력한 데이터는 현재 브라우저에 안전하게 저장됩니다.
                                     </p>
                                 </div>
                             </div>
@@ -488,7 +490,7 @@
                                                             <td className="px-6 py-2 bg-blue-50/10">
                                                                 <input 
                                                                     type="number" 
-                                                                    value={m.half1 ?? ''} 
+                                                                    value={m.half1 || ''} 
                                                                     onChange={(e) => handleMetricChange(m.id, 'half1', e.target.value)}
                                                                     className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
                                                                     placeholder="0"
@@ -497,7 +499,7 @@
                                                             <td className="px-6 py-2 bg-blue-50/10">
                                                                 <input 
                                                                     type="number" 
-                                                                    value={m.half2 ?? ''} 
+                                                                    value={m.half2 || ''} 
                                                                     onChange={(e) => handleMetricChange(m.id, 'half2', e.target.value)}
                                                                     className="w-full px-3 py-1.5 text-right border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-slate-700"
                                                                     placeholder="0"
