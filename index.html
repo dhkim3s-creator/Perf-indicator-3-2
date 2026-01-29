@@ -60,7 +60,7 @@
             Save, LayoutDashboard, Calendar, PieChart as PieChartIcon, 
             CheckCircle2, AlertCircle, Plus, Trash2, Edit2, Search, 
             Building, Users, Coins, Menu, X, ChevronRight, Check, 
-            AlertTriangle, ExternalLink, WifiOff, HardDrive 
+            AlertTriangle, ExternalLink, WifiOff, HardDrive, CloudOff
         } from 'lucide-react';
 
         // --- Firebase Configuration ---
@@ -135,6 +135,7 @@
             const [authError, setAuthError] = useState(null);
             const [activeTab, setActiveTab] = useState('dashboard');
             const [saving, setSaving] = useState(false);
+            const [lastSaved, setLastSaved] = useState(null);
 
             // --- Initial Data State ---
             const [metrics, setMetrics] = useState([
@@ -178,6 +179,24 @@
             const [isEditingBudget, setIsEditingBudget] = useState(false);
             const [newBudgetTotal, setNewBudgetTotal] = useState(0);
 
+            // --- Load Data Helper ---
+            const loadLocalData = () => {
+                try {
+                    const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
+                    if (localData) {
+                        const parsed = JSON.parse(localData);
+                        if (parsed.metrics) setMetrics(parsed.metrics);
+                        if (parsed.tasks) setTasks(parsed.tasks);
+                        if (parsed.budget) setBudget(parsed.budget);
+                        console.log("Loaded data from Local Storage");
+                        return true;
+                    }
+                } catch (e) {
+                    console.log("Failed to load local data", e);
+                }
+                return false;
+            };
+
             // --- Auth & Data Sync ---
             useEffect(() => {
                 const initAuth = async () => {
@@ -188,9 +207,10 @@
                             await signInAnonymously(auth);
                         }
                     } catch (error) {
-                        console.log("Firebase Auth skipped. Switched to Local Storage mode. Error:", error.code);
+                        console.log("Auth failed/skipped. Using offline mode.", error.code);
                         setAuthError(error.code);
                         setIsOffline(true);
+                        loadLocalData(); // Auth 실패 시 바로 로컬 데이터 로드
                         setLoading(false);
                     }
                 };
@@ -201,24 +221,16 @@
                         setUser(user);
                         setIsOffline(false);
                     } else {
+                        // User logged out or not found
                         setUser(null);
                     }
                 });
             }, []);
 
             useEffect(() => {
+                // 오프라인 모드면 로컬에서 로드
                 if (isOffline) {
-                    try {
-                        const localData = localStorage.getItem(LOCAL_STORAGE_KEY);
-                        if (localData) {
-                            const parsed = JSON.parse(localData);
-                            if (parsed.metrics) setMetrics(parsed.metrics);
-                            if (parsed.tasks) setTasks(parsed.tasks);
-                            if (parsed.budget) setBudget(parsed.budget);
-                        }
-                    } catch (e) {
-                        console.log("No local data found, using defaults.");
-                    }
+                    loadLocalData();
                     setLoading(false);
                     return;
                 }
@@ -233,12 +245,18 @@
                         if (data.tasks && Array.isArray(data.tasks)) setTasks(data.tasks);
                         if (data.budget) setBudget(data.budget);
                     } else {
-                        setDoc(docRef, { metrics, tasks, budget });
+                        // 문서가 없으면 로컬 데이터가 있는지 확인해보고, 있으면 그걸로 초기화
+                        const hasLocal = loadLocalData();
+                        if (!hasLocal) {
+                            // 로컬에도 없으면 현재 기본값으로 Firestore 생성 시도 (조용히)
+                            setDoc(docRef, { metrics, tasks, budget }).catch(() => {});
+                        }
                     }
                     setLoading(false);
                 }, (error) => {
-                    console.log("Firebase Snapshot failed, using offline mode.");
+                    console.log("Firestore connect failed, falling back to local.", error);
                     setIsOffline(true);
+                    loadLocalData();
                     setLoading(false);
                 });
 
@@ -254,7 +272,21 @@
                     budget: updatedData.budget || budget
                 };
 
-                // Helper to enforce timeout for cloud operations
+                // 1. 무조건 로컬 스토리지에 먼저 저장 (안전장치)
+                try {
+                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+                    setLastSaved(new Date());
+                } catch (e) {
+                    console.log("Local save failed", e);
+                }
+
+                // 2. 오프라인 모드면 여기서 종료
+                if (isOffline || !user) {
+                    setTimeout(() => setSaving(false), 300); // UI 반응을 위해 짧은 지연
+                    return;
+                }
+
+                // 3. 온라인이면 백그라운드에서 Firebase 저장 시도 (Timeout 적용)
                 const setDocWithTimeout = (docRef, data, timeoutMs) => {
                     return Promise.race([
                         setDoc(docRef, data),
@@ -264,35 +296,19 @@
                     ]);
                 };
 
-                if (isOffline) {
-                    try {
-                        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
-                    } catch (e) {
-                        console.log("Local save failed");
-                    } finally {
-                        setTimeout(() => setSaving(false), 500);
-                    }
-                    return;
-                }
-
-                if (!user) {
-                    setSaving(false);
-                    return;
-                }
-
                 try {
-                    // Try cloud save with 3-second timeout to prevent "stuck" UI
                     await setDocWithTimeout(
                         doc(db, 'artifacts', appId, 'public', 'data', 'project_data_v2', 'main'), 
                         dataToSave, 
-                        3000
+                        2000 // 2초 안에 응답 없으면 무시 (로컬엔 이미 저장됨)
                     );
                 } catch (err) {
-                    console.log("Cloud save failed or timed out, switching to offline mode for this session.", err);
-                    setIsOffline(true); // Switch to offline to prevent further lags
-                    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+                    console.log("Cloud save skipped (offline or permission issue). Local save is secure.");
+                    // 클라우드 저장 실패해도 로컬엔 저장되었으므로 에러 처리 안함
+                    // 필요시 오프라인 모드로 전환
+                    // setIsOffline(true); 
                 } finally {
-                    setTimeout(() => setSaving(false), 500);
+                    setSaving(false);
                 }
             };
 
@@ -419,8 +435,16 @@
                             </div>
 
                             <div className="hidden md:flex items-center gap-3">
-                                {saving && <span className="text-xs text-blue-600 animate-pulse">저장 중...</span>}
-                                {!saving && <span className="text-xs text-slate-400">{isOffline ? '브라우저 저장' : '자동 저장됨'}</span>}
+                                {saving ? (
+                                    <span className="text-xs text-blue-600 font-medium flex items-center gap-1">
+                                        <div className="w-2 h-2 bg-blue-600 rounded-full animate-ping"></div> 저장 중...
+                                    </span>
+                                ) : (
+                                    <span className="text-xs text-slate-400 flex flex-col items-end">
+                                        <span>{isOffline ? '로컬 저장됨' : '저장 완료'}</span>
+                                        {lastSaved && <span className="text-[10px] opacity-70">{lastSaved.toLocaleTimeString()}</span>}
+                                    </span>
+                                )}
                                 <button onClick={() => saveData()} className={`hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition-all ${isOffline ? 'bg-slate-700 hover:bg-slate-800' : 'bg-blue-600'}`}>
                                     <Save size={16} /> {isOffline ? '로컬 저장' : '전체 저장'}
                                 </button>
@@ -440,7 +464,7 @@
                                         <p className="text-sm text-blue-700 mt-1">
                                             Firebase 콘솔의 <strong>Authentication > Sign-in method</strong> 탭에서<br/> 
                                             <strong>Anonymous (익명)</strong> 로그인을 활성화(Enable)해야 클라우드 저장이 가능합니다.<br/>
-                                            <span className="text-xs text-blue-500 mt-1 block">* 현재는 데이터가 이 컴퓨터(브라우저)에만 저장됩니다.</span>
+                                            <span className="text-xs text-blue-500 mt-1 block">* 현재는 데이터가 이 컴퓨터(브라우저)에만 안전하게 저장됩니다.</span>
                                         </p>
                                     ) : (
                                         <p className="text-sm text-blue-700 mt-1">
